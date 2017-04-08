@@ -17,6 +17,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <fs.h>
+#include <vector>
+#include <map>
+#include <string>
 
 using namespace std;
 
@@ -50,6 +53,16 @@ using namespace std;
 //EPIPE         32      /* Broken pipe */
 //ENOTEMPTY     36      /* Directory not empty */
 //ENAMETOOLONG  40      /* The name given is too long */
+
+
+//////////////////////////////////////////////////////////////////
+// 
+// GLOBALS
+//
+/////////////////////////////////////////////////////////////////
+vector<BLOCK> blocks;
+map<string, NODE> nodes;
+
 
 //Use debugf and NOT printf() to make your
 //debug outputs. Do not modify this function.
@@ -86,7 +99,80 @@ int debugf(const char *fmt, ...)
 int fs_drive(const char *dname)
 {
 	debugf("fs_drive: %s\n", dname);
-	return -EIO;
+
+    FILE *fin;
+    BLOCK_HEADER bh;
+    NODE n;
+    BLOCK b;
+    uint64_t numBlocks;
+
+    // Open dname.
+    if((fin = fopen(dname, "r")) == NULL) {
+        debugf("unable to open file: %s\n", dname);
+        return -EIO;
+    }
+
+    // Read the block header into bh.
+    if(fread(&bh, sizeof(BLOCK_HEADER), 1, fin) != 1) {
+        debugf("unable to read header from file: %s\n", dname);
+        return -EIO;
+    }
+
+    // Check magic.
+    if(strncmp(bh.magic, MAGIC, 8) != 0) {
+        debugf("MAGIC does not match: %s\n", bh.magic);
+        return -EIO;
+    }
+
+    // Read in nodes.
+    for(unsigned int i = 0; i < bh.nodes; i++) {
+        if(fread(&n, ONDISK_NODE_SIZE, 1, fin) != 1) {
+            debugf("unable to read node %d from hard_drive\n", i);
+            return -EIO;
+        }
+
+        // Make room in memory for the list of block pointers.
+        if(S_ISDIR(n.mode) || S_ISLNK(n.mode))
+            numBlocks = 0;
+        else
+            numBlocks = n.size / bh.block_size + 1;
+
+        n.blocks = (uint64_t*)malloc(sizeof(uint64_t *) * numBlocks);
+
+        // Read in the list of block indices.
+        for(unsigned int j = 0; j < numBlocks; j++) {
+            uint64_t k;
+            if(fread(&k, sizeof(uint64_t), 1, fin) != 1) {
+                debugf("unable to read block offset %d from node %d\n", j, i);
+                return -EIO;
+            }
+            n.blocks[j] = k;
+        }
+
+        // Save n.
+        nodes.insert(pair<string, NODE>(n.name, n));
+    }
+
+    // Read in blocks.
+    for(unsigned int i = 0; i < bh.blocks; i++) {
+        b.data = (char*)malloc(sizeof(char) * bh.block_size);
+        if(fread(b.data, sizeof(char) * bh.block_size, 1, fin) != 1) {
+            debugf("unable to read block %d\n", i);
+            return -EIO;
+        }
+
+        // Save the block.
+        blocks.push_back(b);
+    }
+
+
+    // Close the file.
+    if(fclose(fin) != 0) {
+        debugf("unable to close file: %s\n", dname);
+        return -EIO;
+    }
+
+	return 0;
 }
 
 //////////////////////////////////////////////////////////////////
