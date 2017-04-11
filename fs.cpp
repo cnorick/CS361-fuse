@@ -18,8 +18,8 @@
 #include <fcntl.h>
 #include <fs.h>
 #include <vector>
-#include <map>
 #include <string>
+#include <list>
 
 using namespace std;
 
@@ -54,6 +54,20 @@ using namespace std;
 //ENOTEMPTY     36      /* Directory not empty */
 //ENAMETOOLONG  40      /* The name given is too long */
 
+list <string> Split(string abs_path);
+void insertNode(NODE n);
+list<NODE> getChildren(const char* path);
+
+typedef struct TreeNode {
+        list<TreeNode*> children;
+        NODE node;
+        string relName;
+        TreeNode(NODE n) : node(n) {
+            relName = Split(n.name).back();
+        }
+} TreeNode;
+
+void printFileTree(TreeNode *root, int level = 0);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -61,7 +75,7 @@ using namespace std;
 //
 /////////////////////////////////////////////////////////////////
 vector<BLOCK> blocks;
-map<string, NODE> nodes;
+TreeNode *root = NULL;
 
 
 //Use debugf and NOT printf() to make your
@@ -69,17 +83,17 @@ map<string, NODE> nodes;
 #if defined(DEBUG)
 int debugf(const char *fmt, ...)
 {
-	int bytes = 0;
-	va_list args;
-	va_start(args, fmt);
-	bytes = vfprintf(stderr, fmt, args);
-	va_end(args);
-	return bytes;
+    int bytes = 0;
+    va_list args;
+    va_start(args, fmt);
+    bytes = vfprintf(stderr, fmt, args);
+    va_end(args);
+    return bytes;
 }
 #else
 int debugf(const char *fmt, ...)
 {
-	return 0;
+    return 0;
 }
 #endif
 
@@ -98,7 +112,7 @@ int debugf(const char *fmt, ...)
 //////////////////////////////////////////////////////////////////
 int fs_drive(const char *dname)
 {
-	debugf("fs_drive: %s\n", dname);
+    debugf("fs_drive: %s\n", dname);
 
     FILE *fin;
     BLOCK_HEADER bh;
@@ -150,8 +164,9 @@ int fs_drive(const char *dname)
         }
 
         // Save n.
-        nodes.insert(pair<string, NODE>(n.name, n));
+        insertNode(n);
     }
+
 
     // Read in blocks.
     for(unsigned int i = 0; i < bh.blocks; i++) {
@@ -172,7 +187,7 @@ int fs_drive(const char *dname)
         return -EIO;
     }
 
-	return 0;
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -182,8 +197,8 @@ int fs_drive(const char *dname)
 //////////////////////////////////////////////////////////////////
 int fs_open(const char *path, struct fuse_file_info *fi)
 {
-	debugf("fs_open: %s\n", path);
-	return -EIO;
+    debugf("fs_open: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -192,10 +207,10 @@ int fs_open(const char *path, struct fuse_file_info *fi)
 //need to start the reading at the offset given by <offset>.
 //////////////////////////////////////////////////////////////////
 int fs_read(const char *path, char *buf, size_t size, off_t offset,
-	    struct fuse_file_info *fi)
+        struct fuse_file_info *fi)
 {
-	debugf("fs_read: %s\n", path);
-	return -EIO;
+    debugf("fs_read: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -208,10 +223,10 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
 //If all works, return the number of bytes written.
 //////////////////////////////////////////////////////////////////
 int fs_write(const char *path, const char *data, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+        struct fuse_file_info *fi)
 {
-	debugf("fs_write: %s\n", path);
-	return -EIO;
+    debugf("fs_write: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -224,8 +239,8 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 //////////////////////////////////////////////////////////////////
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-	debugf("fs_create: %s\n", path);
-	return -EIO;
+    debugf("fs_create: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -243,8 +258,8 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_getattr(const char *path, struct stat *s)
 {
-	debugf("fs_getattr: %s\n", path);
-	return -EIO;
+    debugf("fs_getattr: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -258,18 +273,18 @@ int fs_getattr(const char *path, struct stat *s)
 //(assuming it passes fs_getattr)
 //////////////////////////////////////////////////////////////////
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-	       off_t offset, struct fuse_file_info *fi)
+        off_t offset, struct fuse_file_info *fi)
 {
-	debugf("fs_readdir: %s\n", path);
+    debugf("fs_readdir: %s\n", path);
 
-	//filler(buf, <name of file/directory>, 0, 0)
-	filler(buf, ".", 0, 0);
-	filler(buf, "..", 0, 0);
+    //filler(buf, <name of file/directory>, 0, 0)
+    filler(buf, ".", 0, 0);
+    filler(buf, "..", 0, 0);
 
-	//You MUST make sure that there is no front slashes in the name (second parameter to filler)
-	//Otherwise, this will FAIL.
+    //You MUST make sure that there is no front slashes in the name (second parameter to filler)
+    //Otherwise, this will FAIL.
 
-	return 0;
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -279,8 +294,8 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 //////////////////////////////////////////////////////////////////
 int fs_opendir(const char *path, struct fuse_file_info *fi)
 {
-	debugf("fs_opendir: %s\n", path);
-	return -EIO;
+    debugf("fs_opendir: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -288,7 +303,7 @@ int fs_opendir(const char *path, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_chmod(const char *path, mode_t mode)
 {
-	return -EIO;
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -296,8 +311,8 @@ int fs_chmod(const char *path, mode_t mode)
 //////////////////////////////////////////////////////////////////
 int fs_chown(const char *path, uid_t uid, gid_t gid)
 {
-	debugf("fs_chown: %s\n", path);
-	return -EIO;
+    debugf("fs_chown: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -309,8 +324,8 @@ int fs_chown(const char *path, uid_t uid, gid_t gid)
 //////////////////////////////////////////////////////////////////
 int fs_unlink(const char *path)
 {
-	debugf("fs_unlink: %s\n", path);
-	return -EIO;
+    debugf("fs_unlink: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -320,8 +335,8 @@ int fs_unlink(const char *path)
 //////////////////////////////////////////////////////////////////
 int fs_mkdir(const char *path, mode_t mode)
 {
-	debugf("fs_mkdir: %s\n", path);
-	return -EIO;
+    debugf("fs_mkdir: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -331,8 +346,8 @@ int fs_mkdir(const char *path, mode_t mode)
 //////////////////////////////////////////////////////////////////
 int fs_rmdir(const char *path)
 {
-	debugf("fs_rmdir: %s\n", path);
-	return -EIO;
+    debugf("fs_rmdir: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -343,8 +358,8 @@ int fs_rmdir(const char *path)
 //////////////////////////////////////////////////////////////////
 int fs_rename(const char *path, const char *new_name)
 {
-	debugf("fs_rename: %s -> %s\n", path, new_name);
-	return -EIO;
+    debugf("fs_rename: %s -> %s\n", path, new_name);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -355,8 +370,8 @@ int fs_rename(const char *path, const char *new_name)
 //////////////////////////////////////////////////////////////////
 int fs_truncate(const char *path, off_t size)
 {
-	debugf("fs_truncate: %s to size %d\n", path, size);
-	return -EIO;
+    debugf("fs_truncate: %s to size %d\n", path, size);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -365,11 +380,11 @@ int fs_truncate(const char *path, off_t size)
 //////////////////////////////////////////////////////////////////
 void fs_destroy(void *ptr)
 {
-	const char *filename = (const char *)ptr;
-	debugf("fs_destroy: %s\n", filename);
+    const char *filename = (const char *)ptr;
+    debugf("fs_destroy: %s\n", filename);
 
-	//Save the internal data to the hard drive
-	//specified by <filename>
+    //Save the internal data to the hard drive
+    //specified by <filename>
 }
 
 //////////////////////////////////////////////////////////////////
@@ -378,34 +393,142 @@ void fs_destroy(void *ptr)
 //////////////////////////////////////////////////////////////////
 int main(int argc, char *argv[])
 {
-	fuse_operations *fops;
-	char *evars[] = { "./fs", "-f", "mnt", NULL };
-	int ret;
+    fuse_operations *fops;
+    char *evars[] = { "./fs", "-f", "mnt", NULL };
+    int ret;
 
-	if ((ret = fs_drive(HARD_DRIVE)) != 0) {
-		debugf("Error reading hard drive: %s\n", strerror(-ret));
-		return ret;
-	}
-	//FUSE operations
-	fops = (struct fuse_operations *) calloc(1, sizeof(struct fuse_operations));
-	fops->getattr = fs_getattr;
-	fops->readdir = fs_readdir;
-	fops->opendir = fs_opendir;
-	fops->open = fs_open;
-	fops->read = fs_read;
-	fops->write = fs_write;
-	fops->create = fs_create;
-	fops->chmod = fs_chmod;
-	fops->chown = fs_chown;
-	fops->unlink = fs_unlink;
-	fops->mkdir = fs_mkdir;
-	fops->rmdir = fs_rmdir;
-	fops->rename = fs_rename;
-	fops->truncate = fs_truncate;
-	fops->destroy = fs_destroy;
+    if ((ret = fs_drive(HARD_DRIVE)) != 0) {
+        debugf("Error reading hard drive: %s\n", strerror(-ret));
+        return ret;
+    }
+    //FUSE operations
+    fops = (struct fuse_operations *) calloc(1, sizeof(struct fuse_operations));
+    fops->getattr = fs_getattr;
+    fops->readdir = fs_readdir;
+    fops->opendir = fs_opendir;
+    fops->open = fs_open;
+    fops->read = fs_read;
+    fops->write = fs_write;
+    fops->create = fs_create;
+    fops->chmod = fs_chmod;
+    fops->chown = fs_chown;
+    fops->unlink = fs_unlink;
+    fops->mkdir = fs_mkdir;
+    fops->rmdir = fs_rmdir;
+    fops->rename = fs_rename;
+    fops->truncate = fs_truncate;
+    fops->destroy = fs_destroy;
 
-	debugf("Press CONTROL-C to quit\n\n");
+    debugf("Press CONTROL-C to quit\n\n");
 
-	return fuse_main(sizeof(evars) / sizeof(evars[0]) - 1, evars, fops,
-			 (void *)HARD_DRIVE);
+    return fuse_main(sizeof(evars) / sizeof(evars[0]) - 1, evars, fops,
+            (void *)HARD_DRIVE);
+}
+
+
+////////////////////////////////////////////////
+// Helper Functions
+///////////////////////////////////////////////
+
+// Splits the abs_path into a list of the strings delimited by /.
+list <string> Split(string abs_path){
+    list <string> retList = *(new list<string>);
+    string str = "";
+
+    for(unsigned int i = 0; i < abs_path.size(); i++){
+        if(abs_path[i] == '/'){
+            retList.push_back(str);
+            str = "";
+        }
+        else
+            str += abs_path[i];    
+    }
+    if(str != "") retList.push_back(str);
+
+/*    for(unsigned int i = 0; i < abs_path.size(); i++){
+        if(abs_path[i] == '/'){
+            if(str != "") retList.push_back(str);
+            str = "";
+        }
+        str += abs_path[i];    
+    }
+    if(str != "") retList.push_back(str);
+*/
+    return retList;
+}
+
+// Traverses the directory tree and returns a pointer to the node specified by path.
+// If the node doesn't exist, null is returned.
+// path is a list returned by Split.
+TreeNode *getTreeNode(list<string> path) {
+    TreeNode *cur = root;
+
+    // Traverse the directory tree looking for matching file names at each level.
+    // If one on of the levels isn't there, we can't get the requested node.
+    list<string>::iterator name = path.begin();
+    name++;
+    for(; name != path.end(); name++) {
+        bool found = false;
+
+        for(list<TreeNode*>::iterator child = cur->children.begin(); child != cur->children.end(); child++) {
+            // If there is a matching subdirectory.
+            if((*child)->relName == *name) {
+                cur = *child;
+                found = true;
+                break;
+            }
+        }
+        // If no child found for this child, it's an error.
+        if(!found)
+            return NULL;
+    }
+
+    return cur;
+}
+
+// Insert NODE n into the correct place in the file tree based on the full path in n.name.
+void insertNode(NODE n) {
+    if(root == NULL) {
+        root = new TreeNode(n);
+        return;
+    }
+
+    list<string> parsedNames = Split(n.name);
+    parsedNames.pop_back();
+    TreeNode *parent = getTreeNode(parsedNames); // The parent dir of NODE n.
+
+    // If getNode returns null, the path doesn't exist.
+    if(parent == NULL)
+        return;
+
+    parent->children.push_back(new TreeNode(n));
+}
+
+// Returns the NODEs located at path.
+list<NODE> getChildren(const char* path) {
+    list<string> parsedNames = Split(path);
+
+    TreeNode *tn = getTreeNode(parsedNames);
+
+    list<NODE> children = *new list<NODE>();
+
+    for(list<TreeNode*>::iterator it = tn->children.begin(); it != tn->children.end(); it++) {
+        children.push_back((*it)->node);
+    }
+
+    return children;
+}
+
+// For debugging. Prints file tree structure.
+void printFileTree(TreeNode *root, int level) {
+    for(int i = 0; i < level; i++)
+        debugf(" ");
+    debugf("%s", root->relName.c_str());
+    if(S_ISDIR(root->node.mode))
+        debugf("/");
+    debugf("\n");
+
+    for(list<TreeNode*>::iterator child = root->children.begin(); child != root->children.end(); child++) {
+        printFileTree(*child, level+1);
+    }
 }
