@@ -36,6 +36,7 @@ all:
 	@if [ ! -d $(DEP_PATH) ]; then mkdir $(DEP_PATH); fi
 	@if [ ! -d $(OBJ_PATH) ]; then mkdir $(OBJ_PATH); fi
 	@$(MAKE) $(PROG)
+	@ctags -R
 
 $(PROG): $(OBJS) Makefile
 	$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)

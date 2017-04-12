@@ -4,6 +4,7 @@ mnt/
 makeblock/objs
 makeblock/makeblock
 makeblock/deps
+tags
 
 hard_drive
 fs
