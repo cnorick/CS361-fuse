@@ -1,1 +1,1 @@
-chmod 777 . && fusermount -uz mnt && chmod 700 .
+chmod 777 . && fusermount -uz mnt && chmod 711 .
