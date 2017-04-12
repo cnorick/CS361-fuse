@@ -55,8 +55,6 @@ using namespace std;
 //ENAMETOOLONG  40      /* The name given is too long */
 
 list <string> Split(string abs_path);
-void insertNode(NODE n);
-list<NODE> getChildren(const char* path);
 
 typedef struct TreeNode {
         list<TreeNode*> children;
@@ -67,7 +65,12 @@ typedef struct TreeNode {
         }
 } TreeNode;
 
+TreeNode *getTreeNode(string path);
+TreeNode *getTreeNode(list<string> path);
 void printFileTree(TreeNode *root, int level = 0);
+void insertNode(NODE n);
+list<TreeNode*> getChildren(const char* path);
+NODE *getNodeFromId(uint64_t id, TreeNode *start = NULL);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -76,6 +79,7 @@ void printFileTree(TreeNode *root, int level = 0);
 /////////////////////////////////////////////////////////////////
 vector<BLOCK> blocks;
 TreeNode *root = NULL;
+BLOCK_HEADER bh;
 
 
 //Use debugf and NOT printf() to make your
@@ -115,7 +119,6 @@ int fs_drive(const char *dname)
     debugf("fs_drive: %s\n", dname);
 
     FILE *fin;
-    BLOCK_HEADER bh;
     NODE n;
     BLOCK b;
     uint64_t numBlocks;
@@ -259,7 +262,29 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 int fs_getattr(const char *path, struct stat *s)
 {
     debugf("fs_getattr: %s\n", path);
-    return -EIO;
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE n = tn->node;
+
+    s->st_ino = n.id;
+    s->st_mode = n.mode;
+    s->st_nlink = 0;
+    s->st_uid = n.uid;
+    s->st_gid = n.gid;
+    s->st_atime = n.atime;
+    s->st_mtime = n.mtime;
+    s->st_ctime = n.ctime;
+    s->st_blksize = bh.block_size;
+    s->st_blocks = n.size / bh.block_size + 1;
+
+    if(S_ISREG(n.mode))
+        s->st_size = n.size;
+    else if(S_ISLNK(n.mode))
+        s->st_size = strlen(getNodeFromId(n.link_id)->name);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -283,6 +308,10 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
     //You MUST make sure that there is no front slashes in the name (second parameter to filler)
     //Otherwise, this will FAIL.
+    
+    list<TreeNode*> children = getChildren(path);
+    for(list<TreeNode*>::iterator it = children.begin(); it != children.end(); it++)
+        filler(buf, (*it)->relName.c_str(), 0, 0);
 
     return 0;
 }
@@ -295,7 +324,11 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 int fs_opendir(const char *path, struct fuse_file_info *fi)
 {
     debugf("fs_opendir: %s\n", path);
-    return -EIO;
+    NODE n = getTreeNode(path)->node;
+    if(S_ISDIR(n.mode))
+        return 0;
+    else 
+        return -ENOENT;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -445,15 +478,6 @@ list <string> Split(string abs_path){
     }
     if(str != "") retList.push_back(str);
 
-/*    for(unsigned int i = 0; i < abs_path.size(); i++){
-        if(abs_path[i] == '/'){
-            if(str != "") retList.push_back(str);
-            str = "";
-        }
-        str += abs_path[i];    
-    }
-    if(str != "") retList.push_back(str);
-*/
     return retList;
 }
 
@@ -486,6 +510,11 @@ TreeNode *getTreeNode(list<string> path) {
     return cur;
 }
 
+TreeNode *getTreeNode(string path) {
+    list<string> parsedNames = Split(path);
+    return getTreeNode(parsedNames);
+}
+
 // Insert NODE n into the correct place in the file tree based on the full path in n.name.
 void insertNode(NODE n) {
     if(root == NULL) {
@@ -505,18 +534,8 @@ void insertNode(NODE n) {
 }
 
 // Returns the NODEs located at path.
-list<NODE> getChildren(const char* path) {
-    list<string> parsedNames = Split(path);
-
-    TreeNode *tn = getTreeNode(parsedNames);
-
-    list<NODE> children = *new list<NODE>();
-
-    for(list<TreeNode*>::iterator it = tn->children.begin(); it != tn->children.end(); it++) {
-        children.push_back((*it)->node);
-    }
-
-    return children;
+list<TreeNode*> getChildren(const char* path) {
+    return getTreeNode(path)->children;
 }
 
 // For debugging. Prints file tree structure.
@@ -531,4 +550,24 @@ void printFileTree(TreeNode *root, int level) {
     for(list<TreeNode*>::iterator child = root->children.begin(); child != root->children.end(); child++) {
         printFileTree(*child, level+1);
     }
+}
+
+// Recursively search for the node n with n.id == id.
+// start defaults to root.
+// Returns Null if no id is found.
+NODE *getNodeFromId(uint64_t id, TreeNode *start) {
+    TreeNode *cur = start;
+
+    if(start == NULL)
+        cur = root;
+        
+    if(cur->node.id == id)
+        return &cur->node;
+
+    for(list<TreeNode*>::iterator child = start->children.begin(); child != start->children.end(); child++) {
+        if(getNodeFromId((*child)->node.id) != NULL)
+            return &(*child)->node;
+    }
+
+    return NULL;
 }
