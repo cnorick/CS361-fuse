@@ -1,6 +1,9 @@
 deps/
 objs/
 mnt/
+makeblock/objs
+makeblock/makeblock
+makeblock/deps
 
 hard_drive
 fs
