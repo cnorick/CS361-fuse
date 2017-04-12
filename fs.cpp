@@ -20,6 +20,7 @@
 #include <vector>
 #include <string>
 #include <list>
+#include <algorithm>
 
 using namespace std;
 
@@ -71,6 +72,7 @@ void printFileTree(TreeNode *root, int level = 0);
 void insertNode(NODE n);
 list<TreeNode*> getChildren(const char* path);
 NODE *getNodeFromId(uint64_t id, TreeNode *start = NULL);
+uint64_t getNumBlocks(const NODE &n);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -149,10 +151,7 @@ int fs_drive(const char *dname)
         }
 
         // Make room in memory for the list of block pointers.
-        if(S_ISDIR(n.mode) || S_ISLNK(n.mode))
-            numBlocks = 0;
-        else
-            numBlocks = n.size / bh.block_size + 1;
+        numBlocks = getNumBlocks(n);
 
         n.blocks = (uint64_t*)malloc(sizeof(uint64_t *) * numBlocks);
 
@@ -201,7 +200,14 @@ int fs_drive(const char *dname)
 int fs_open(const char *path, struct fuse_file_info *fi)
 {
     debugf("fs_open: %s\n", path);
-    return -EIO;
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    else if(S_ISDIR(tn->node.mode))
+        return -EISDIR;
+    else
+        return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -213,7 +219,36 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
         struct fuse_file_info *fi)
 {
     debugf("fs_read: %s\n", path);
-    return -EIO;
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE n = tn->node;
+
+    if(S_ISDIR(n.mode))
+        return -EISDIR;
+    else if(S_ISLNK(n.mode))
+        n = *getNodeFromId(n.link_id);
+
+
+
+    char *ptr = buf;
+    size_t totalSize = 0;
+    uint64_t numBlocks = getNumBlocks(n);
+
+    for(uint64_t i = 0; i < numBlocks && totalSize < size; i++) {
+        uint64_t offset = n.blocks[i];
+        BLOCK b = blocks[offset];
+
+        size_t numToCopy = min(size - totalSize, bh.block_size);
+        
+        memcpy(ptr, b.data, numToCopy);
+        ptr += numToCopy;
+        totalSize += numToCopy;
+    }
+
+    return totalSize;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -570,4 +605,11 @@ NODE *getNodeFromId(uint64_t id, TreeNode *start) {
     }
 
     return NULL;
+}
+
+uint64_t getNumBlocks(const NODE &n) {
+    if(S_ISDIR(n.mode) || S_ISLNK(n.mode))
+        return 0;
+    else
+        return n.size / bh.block_size + 1;
 }
