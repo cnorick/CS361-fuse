@@ -59,29 +59,32 @@ list <string> Split(string abs_path);
 
 typedef struct TreeNode {
         list<TreeNode*> children;
-        NODE node;
+        NODE *node;
         string relName;
-        TreeNode(NODE n) : node(n) {
-            relName = Split(n.name).back();
+        TreeNode(NODE *n) : node(n) {
+            relName = Split(n->name).back();
         }
 } TreeNode;
 
 TreeNode *getTreeNode(string path);
 TreeNode *getTreeNode(list<string> path);
 void printFileTree(TreeNode *root, int level = 0);
-void insertNode(NODE n);
+void insertNode(NODE *n);
 list<TreeNode*> getChildren(const char* path);
-NODE *getNodeFromId(uint64_t id, TreeNode *start = NULL);
-uint64_t getNumBlocks(const NODE &n);
+NODE *getNodeFromId(uint64_t id);
+uint64_t getNumBlocks(const NODE *n);
+void addId(NODE *n);
+uint64_t getAvailId();
 
 //////////////////////////////////////////////////////////////////
 // 
 // GLOBALS
 //
 /////////////////////////////////////////////////////////////////
-vector<BLOCK> blocks;
+vector<BLOCK*> blocks;
 TreeNode *root = NULL;
 BLOCK_HEADER bh;
+vector<NODE*> idList; // list of nodes with id as index.
 
 
 //Use debugf and NOT printf() to make your
@@ -121,8 +124,8 @@ int fs_drive(const char *dname)
     debugf("fs_drive: %s\n", dname);
 
     FILE *fin;
-    NODE n;
-    BLOCK b;
+    NODE *n;
+    BLOCK *b;
     uint64_t numBlocks;
 
     // Open dname.
@@ -145,7 +148,8 @@ int fs_drive(const char *dname)
 
     // Read in nodes.
     for(unsigned int i = 0; i < bh.nodes; i++) {
-        if(fread(&n, ONDISK_NODE_SIZE, 1, fin) != 1) {
+        n = new NODE();
+        if(fread(n, ONDISK_NODE_SIZE, 1, fin) != 1) {
             debugf("unable to read node %d from hard_drive\n", i);
             return -EIO;
         }
@@ -153,7 +157,7 @@ int fs_drive(const char *dname)
         // Make room in memory for the list of block pointers.
         numBlocks = getNumBlocks(n);
 
-        n.blocks = (uint64_t*)malloc(sizeof(uint64_t *) * numBlocks);
+        n->blocks = (uint64_t*)malloc(sizeof(uint64_t *) * numBlocks);
 
         // Read in the list of block indices.
         for(unsigned int j = 0; j < numBlocks; j++) {
@@ -162,7 +166,7 @@ int fs_drive(const char *dname)
                 debugf("unable to read block offset %d from node %d\n", j, i);
                 return -EIO;
             }
-            n.blocks[j] = k;
+            n->blocks[j] = k;
         }
 
         // Save n.
@@ -172,8 +176,9 @@ int fs_drive(const char *dname)
 
     // Read in blocks.
     for(unsigned int i = 0; i < bh.blocks; i++) {
-        b.data = (char*)malloc(sizeof(char) * bh.block_size);
-        if(fread(b.data, sizeof(char) * bh.block_size, 1, fin) != 1) {
+        b = new BLOCK();
+        b->data = (char*)malloc(sizeof(char) * bh.block_size);
+        if(fread(b->data, sizeof(char) * bh.block_size, 1, fin) != 1) {
             debugf("unable to read block %d\n", i);
             return -EIO;
         }
@@ -204,7 +209,7 @@ int fs_open(const char *path, struct fuse_file_info *fi)
     TreeNode *tn = getTreeNode(path);
     if(tn == NULL)
         return -ENOENT;
-    else if(S_ISDIR(tn->node.mode))
+    else if(S_ISDIR(tn->node->mode))
         return -EISDIR;
     else
         return 0;
@@ -224,12 +229,12 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
     if(tn == NULL)
         return -ENOENT;
 
-    NODE n = tn->node;
+    NODE *n = tn->node;
 
-    if(S_ISDIR(n.mode))
+    if(S_ISDIR(n->mode))
         return -EISDIR;
-    else if(S_ISLNK(n.mode))
-        n = *getNodeFromId(n.link_id);
+    else if(S_ISLNK(n->mode))
+        n = getNodeFromId(n->link_id);
 
 
 
@@ -238,12 +243,12 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
     uint64_t numBlocks = getNumBlocks(n);
 
     for(uint64_t i = 0; i < numBlocks && totalSize < size; i++) {
-        uint64_t offset = n.blocks[i];
-        BLOCK b = blocks[offset];
+        uint64_t offset = n->blocks[i];
+        BLOCK *b = blocks[offset];
 
         size_t numToCopy = min(size - totalSize, bh.block_size);
         
-        memcpy(ptr, b.data, numToCopy);
+        memcpy(ptr, b->data, numToCopy);
         ptr += numToCopy;
         totalSize += numToCopy;
     }
@@ -278,6 +283,15 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     debugf("fs_create: %s\n", path);
+
+    // Check for existence.
+    if(getTreeNode(path) != NULL)
+        return -EEXIST;
+
+    //NODE n;
+    
+    
+
     return -EIO;
 }
 
@@ -301,23 +315,23 @@ int fs_getattr(const char *path, struct stat *s)
     if(tn == NULL)
         return -ENOENT;
 
-    NODE n = tn->node;
+    NODE *n = tn->node;
 
-    s->st_ino = n.id;
-    s->st_mode = n.mode;
+    s->st_ino = n->id;
+    s->st_mode = n->mode;
     s->st_nlink = 0;
-    s->st_uid = n.uid;
-    s->st_gid = n.gid;
-    s->st_atime = n.atime;
-    s->st_mtime = n.mtime;
-    s->st_ctime = n.ctime;
+    s->st_uid = n->uid;
+    s->st_gid = n->gid;
+    s->st_atime = n->atime;
+    s->st_mtime = n->mtime;
+    s->st_ctime = n->ctime;
     s->st_blksize = bh.block_size;
-    s->st_blocks = n.size / bh.block_size + 1;
+    s->st_blocks = getNumBlocks(n);
 
-    if(S_ISREG(n.mode))
-        s->st_size = n.size;
-    else if(S_ISLNK(n.mode))
-        s->st_size = strlen(getNodeFromId(n.link_id)->name);
+    if(S_ISREG(n->mode))
+        s->st_size = n->size;
+    else if(S_ISLNK(n->mode))
+        s->st_size = strlen(getNodeFromId(n->link_id)->name);
 
     return 0;
 }
@@ -359,8 +373,8 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 int fs_opendir(const char *path, struct fuse_file_info *fi)
 {
     debugf("fs_opendir: %s\n", path);
-    NODE n = getTreeNode(path)->node;
-    if(S_ISDIR(n.mode))
+    NODE *n = getTreeNode(path)->node;
+    if(S_ISDIR(n->mode))
         return 0;
     else 
         return -ENOENT;
@@ -551,21 +565,44 @@ TreeNode *getTreeNode(string path) {
 }
 
 // Insert NODE n into the correct place in the file tree based on the full path in n.name.
-void insertNode(NODE n) {
+void insertNode(NODE* n) {
     if(root == NULL) {
         root = new TreeNode(n);
+        addId(n);
         return;
     }
 
-    list<string> parsedNames = Split(n.name);
+    list<string> parsedNames = Split(n->name);
     parsedNames.pop_back();
     TreeNode *parent = getTreeNode(parsedNames); // The parent dir of NODE n.
 
-    // If getNode returns null, the path doesn't exist.
+    // If getTreeNode returns null, the path doesn't exist.
     if(parent == NULL)
         return;
 
     parent->children.push_back(new TreeNode(n));
+    addId(n);
+}
+
+void addId(NODE *n) {
+    if(idList.size() < n->id + 1)
+        idList.resize(n->id + 1, NULL);
+
+    idList[n->id] = n;
+}
+
+uint64_t getAvailId() {
+    int size = 20; // How much to resize by when it's needed.
+
+    for(uint64_t i = 0; i < idList.size(); i++) {
+        if(idList[i] == NULL)
+            return i;
+    }
+
+    uint64_t ret = idList.size();
+    idList.resize(size, NULL);
+
+    return ret;
 }
 
 // Returns the NODEs located at path.
@@ -578,7 +615,7 @@ void printFileTree(TreeNode *root, int level) {
     for(int i = 0; i < level; i++)
         debugf(" ");
     debugf("%s", root->relName.c_str());
-    if(S_ISDIR(root->node.mode))
+    if(S_ISDIR(root->node->mode))
         debugf("/");
     debugf("\n");
 
@@ -590,26 +627,13 @@ void printFileTree(TreeNode *root, int level) {
 // Recursively search for the node n with n.id == id.
 // start defaults to root.
 // Returns Null if no id is found.
-NODE *getNodeFromId(uint64_t id, TreeNode *start) {
-    TreeNode *cur = start;
-
-    if(start == NULL)
-        cur = root;
-        
-    if(cur->node.id == id)
-        return &cur->node;
-
-    for(list<TreeNode*>::iterator child = start->children.begin(); child != start->children.end(); child++) {
-        if(getNodeFromId((*child)->node.id) != NULL)
-            return &(*child)->node;
-    }
-
-    return NULL;
+NODE *getNodeFromId(uint64_t id) {
+    return idList[id];
 }
 
-uint64_t getNumBlocks(const NODE &n) {
-    if(S_ISDIR(n.mode) || S_ISLNK(n.mode))
+uint64_t getNumBlocks(const NODE *n) {
+    if(S_ISDIR(n->mode) || S_ISLNK(n->mode))
         return 0;
     else
-        return n.size / bh.block_size + 1;
+        return n->size / bh.block_size + 1;
 }
