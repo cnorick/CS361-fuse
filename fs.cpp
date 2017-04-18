@@ -17,6 +17,10 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <fs.h>
+#include <vector>
+#include <string>
+#include <list>
+#include <algorithm>
 
 using namespace std;
 
@@ -51,22 +55,54 @@ using namespace std;
 //ENOTEMPTY     36      /* Directory not empty */
 //ENAMETOOLONG  40      /* The name given is too long */
 
+list <string> Split(string abs_path);
+
+typedef struct TreeNode {
+        list<TreeNode*> children;
+        NODE *node;
+        string relName;
+        TreeNode(NODE *n) : node(n) {
+            relName = Split(n->name).back();
+        }
+} TreeNode;
+
+TreeNode *getTreeNode(string path);
+TreeNode *getTreeNode(list<string> path);
+void printFileTree(TreeNode *root, int level = 0);
+void insertNode(NODE *n);
+list<TreeNode*> getChildren(const char* path);
+NODE *getNodeFromId(uint64_t id);
+uint64_t getNumBlocks(const NODE *n);
+void addId(NODE *n);
+uint64_t getAvailId();
+
+//////////////////////////////////////////////////////////////////
+// 
+// GLOBALS
+//
+/////////////////////////////////////////////////////////////////
+vector<BLOCK*> blocks;
+TreeNode *root = NULL;
+BLOCK_HEADER bh;
+vector<NODE*> idList; // list of nodes with id as index.
+
+
 //Use debugf and NOT printf() to make your
 //debug outputs. Do not modify this function.
 #if defined(DEBUG)
 int debugf(const char *fmt, ...)
 {
-	int bytes = 0;
-	va_list args;
-	va_start(args, fmt);
-	bytes = vfprintf(stderr, fmt, args);
-	va_end(args);
-	return bytes;
+    int bytes = 0;
+    va_list args;
+    va_start(args, fmt);
+    bytes = vfprintf(stderr, fmt, args);
+    va_end(args);
+    return bytes;
 }
 #else
 int debugf(const char *fmt, ...)
 {
-	return 0;
+    return 0;
 }
 #endif
 
@@ -85,8 +121,80 @@ int debugf(const char *fmt, ...)
 //////////////////////////////////////////////////////////////////
 int fs_drive(const char *dname)
 {
-	debugf("fs_drive: %s\n", dname);
-	return -EIO;
+    debugf("fs_drive: %s\n", dname);
+
+    FILE *fin;
+    NODE *n;
+    BLOCK *b;
+    uint64_t numBlocks;
+
+    // Open dname.
+    if((fin = fopen(dname, "r")) == NULL) {
+        debugf("unable to open file: %s\n", dname);
+        return -EIO;
+    }
+
+    // Read the block header into bh.
+    if(fread(&bh, sizeof(BLOCK_HEADER), 1, fin) != 1) {
+        debugf("unable to read header from file: %s\n", dname);
+        return -EIO;
+    }
+
+    // Check magic.
+    if(strncmp(bh.magic, MAGIC, 8) != 0) {
+        debugf("MAGIC does not match: %s\n", bh.magic);
+        return -EIO;
+    }
+
+    // Read in nodes.
+    for(unsigned int i = 0; i < bh.nodes; i++) {
+        n = new NODE();
+        if(fread(n, ONDISK_NODE_SIZE, 1, fin) != 1) {
+            debugf("unable to read node %d from hard_drive\n", i);
+            return -EIO;
+        }
+
+        // Make room in memory for the list of block pointers.
+        numBlocks = getNumBlocks(n);
+
+        n->blocks = (uint64_t*)malloc(sizeof(uint64_t *) * numBlocks);
+
+        // Read in the list of block indices.
+        for(unsigned int j = 0; j < numBlocks; j++) {
+            uint64_t k;
+            if(fread(&k, sizeof(uint64_t), 1, fin) != 1) {
+                debugf("unable to read block offset %d from node %d\n", j, i);
+                return -EIO;
+            }
+            n->blocks[j] = k;
+        }
+
+        // Save n.
+        insertNode(n);
+    }
+
+
+    // Read in blocks.
+    for(unsigned int i = 0; i < bh.blocks; i++) {
+        b = new BLOCK();
+        b->data = (char*)malloc(sizeof(char) * bh.block_size);
+        if(fread(b->data, sizeof(char) * bh.block_size, 1, fin) != 1) {
+            debugf("unable to read block %d\n", i);
+            return -EIO;
+        }
+
+        // Save the block.
+        blocks.push_back(b);
+    }
+
+
+    // Close the file.
+    if(fclose(fin) != 0) {
+        debugf("unable to close file: %s\n", dname);
+        return -EIO;
+    }
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -96,8 +204,15 @@ int fs_drive(const char *dname)
 //////////////////////////////////////////////////////////////////
 int fs_open(const char *path, struct fuse_file_info *fi)
 {
-	debugf("fs_open: %s\n", path);
-	return -EIO;
+    debugf("fs_open: %s\n", path);
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    else if(S_ISDIR(tn->node->mode))
+        return -EISDIR;
+    else
+        return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -106,10 +221,39 @@ int fs_open(const char *path, struct fuse_file_info *fi)
 //need to start the reading at the offset given by <offset>.
 //////////////////////////////////////////////////////////////////
 int fs_read(const char *path, char *buf, size_t size, off_t offset,
-	    struct fuse_file_info *fi)
+        struct fuse_file_info *fi)
 {
-	debugf("fs_read: %s\n", path);
-	return -EIO;
+    debugf("fs_read: %s\n", path);
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE *n = tn->node;
+
+    if(S_ISDIR(n->mode))
+        return -EISDIR;
+    else if(S_ISLNK(n->mode))
+        n = getNodeFromId(n->link_id);
+
+
+
+    char *ptr = buf;
+    size_t totalSize = 0;
+    uint64_t numBlocks = getNumBlocks(n);
+
+    for(uint64_t i = 0; i < numBlocks && totalSize < size; i++) {
+        uint64_t offset = n->blocks[i];
+        BLOCK *b = blocks[offset];
+
+        size_t numToCopy = min(size - totalSize, bh.block_size);
+        
+        memcpy(ptr, b->data, numToCopy);
+        ptr += numToCopy;
+        totalSize += numToCopy;
+    }
+
+    return totalSize;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -122,10 +266,10 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
 //If all works, return the number of bytes written.
 //////////////////////////////////////////////////////////////////
 int fs_write(const char *path, const char *data, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+        struct fuse_file_info *fi)
 {
-	debugf("fs_write: %s\n", path);
-	return -EIO;
+    debugf("fs_write: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -138,8 +282,17 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 //////////////////////////////////////////////////////////////////
 int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-	debugf("fs_create: %s\n", path);
-	return -EIO;
+    debugf("fs_create: %s\n", path);
+
+    // Check for existence.
+    if(getTreeNode(path) != NULL)
+        return -EEXIST;
+
+    //NODE n;
+    
+    
+
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -157,8 +310,30 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_getattr(const char *path, struct stat *s)
 {
-	debugf("fs_getattr: %s\n", path);
-	return -EIO;
+    debugf("fs_getattr: %s\n", path);
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE *n = tn->node;
+
+    s->st_ino = n->id;
+    s->st_mode = n->mode;
+    s->st_nlink = 0;
+    s->st_uid = n->uid;
+    s->st_gid = n->gid;
+    s->st_atime = n->atime;
+    s->st_mtime = n->mtime;
+    s->st_ctime = n->ctime;
+    s->st_blksize = bh.block_size;
+    s->st_blocks = getNumBlocks(n);
+
+    if(S_ISREG(n->mode))
+        s->st_size = n->size;
+    else if(S_ISLNK(n->mode))
+        s->st_size = strlen(getNodeFromId(n->link_id)->name);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -172,18 +347,22 @@ int fs_getattr(const char *path, struct stat *s)
 //(assuming it passes fs_getattr)
 //////////////////////////////////////////////////////////////////
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-	       off_t offset, struct fuse_file_info *fi)
+        off_t offset, struct fuse_file_info *fi)
 {
-	debugf("fs_readdir: %s\n", path);
+    debugf("fs_readdir: %s\n", path);
 
-	//filler(buf, <name of file/directory>, 0, 0)
-	filler(buf, ".", 0, 0);
-	filler(buf, "..", 0, 0);
+    //filler(buf, <name of file/directory>, 0, 0)
+    filler(buf, ".", 0, 0);
+    filler(buf, "..", 0, 0);
 
-	//You MUST make sure that there is no front slashes in the name (second parameter to filler)
-	//Otherwise, this will FAIL.
+    //You MUST make sure that there is no front slashes in the name (second parameter to filler)
+    //Otherwise, this will FAIL.
+    
+    list<TreeNode*> children = getChildren(path);
+    for(list<TreeNode*>::iterator it = children.begin(); it != children.end(); it++)
+        filler(buf, (*it)->relName.c_str(), 0, 0);
 
-	return 0;
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -193,8 +372,12 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 //////////////////////////////////////////////////////////////////
 int fs_opendir(const char *path, struct fuse_file_info *fi)
 {
-	debugf("fs_opendir: %s\n", path);
-	return -EIO;
+    debugf("fs_opendir: %s\n", path);
+    NODE *n = getTreeNode(path)->node;
+    if(S_ISDIR(n->mode))
+        return 0;
+    else 
+        return -ENOENT;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -202,7 +385,7 @@ int fs_opendir(const char *path, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_chmod(const char *path, mode_t mode)
 {
-	return -EIO;
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -210,8 +393,8 @@ int fs_chmod(const char *path, mode_t mode)
 //////////////////////////////////////////////////////////////////
 int fs_chown(const char *path, uid_t uid, gid_t gid)
 {
-	debugf("fs_chown: %s\n", path);
-	return -EIO;
+    debugf("fs_chown: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -223,8 +406,8 @@ int fs_chown(const char *path, uid_t uid, gid_t gid)
 //////////////////////////////////////////////////////////////////
 int fs_unlink(const char *path)
 {
-	debugf("fs_unlink: %s\n", path);
-	return -EIO;
+    debugf("fs_unlink: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -234,8 +417,8 @@ int fs_unlink(const char *path)
 //////////////////////////////////////////////////////////////////
 int fs_mkdir(const char *path, mode_t mode)
 {
-	debugf("fs_mkdir: %s\n", path);
-	return -EIO;
+    debugf("fs_mkdir: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -245,8 +428,8 @@ int fs_mkdir(const char *path, mode_t mode)
 //////////////////////////////////////////////////////////////////
 int fs_rmdir(const char *path)
 {
-	debugf("fs_rmdir: %s\n", path);
-	return -EIO;
+    debugf("fs_rmdir: %s\n", path);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -257,8 +440,8 @@ int fs_rmdir(const char *path)
 //////////////////////////////////////////////////////////////////
 int fs_rename(const char *path, const char *new_name)
 {
-	debugf("fs_rename: %s -> %s\n", path, new_name);
-	return -EIO;
+    debugf("fs_rename: %s -> %s\n", path, new_name);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -269,8 +452,8 @@ int fs_rename(const char *path, const char *new_name)
 //////////////////////////////////////////////////////////////////
 int fs_truncate(const char *path, off_t size)
 {
-	debugf("fs_truncate: %s to size %d\n", path, size);
-	return -EIO;
+    debugf("fs_truncate: %s to size %d\n", path, size);
+    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -279,11 +462,11 @@ int fs_truncate(const char *path, off_t size)
 //////////////////////////////////////////////////////////////////
 void fs_destroy(void *ptr)
 {
-	const char *filename = (const char *)ptr;
-	debugf("fs_destroy: %s\n", filename);
+    const char *filename = (const char *)ptr;
+    debugf("fs_destroy: %s\n", filename);
 
-	//Save the internal data to the hard drive
-	//specified by <filename>
+    //Save the internal data to the hard drive
+    //specified by <filename>
 }
 
 //////////////////////////////////////////////////////////////////
@@ -292,34 +475,165 @@ void fs_destroy(void *ptr)
 //////////////////////////////////////////////////////////////////
 int main(int argc, char *argv[])
 {
-	fuse_operations *fops;
-	char *evars[] = { "./fs", "-f", "mnt", NULL };
-	int ret;
+    fuse_operations *fops;
+    char *evars[] = { "./fs", "-f", "mnt", NULL };
+    int ret;
 
-	if ((ret = fs_drive(HARD_DRIVE)) != 0) {
-		debugf("Error reading hard drive: %s\n", strerror(-ret));
-		return ret;
-	}
-	//FUSE operations
-	fops = (struct fuse_operations *) calloc(1, sizeof(struct fuse_operations));
-	fops->getattr = fs_getattr;
-	fops->readdir = fs_readdir;
-	fops->opendir = fs_opendir;
-	fops->open = fs_open;
-	fops->read = fs_read;
-	fops->write = fs_write;
-	fops->create = fs_create;
-	fops->chmod = fs_chmod;
-	fops->chown = fs_chown;
-	fops->unlink = fs_unlink;
-	fops->mkdir = fs_mkdir;
-	fops->rmdir = fs_rmdir;
-	fops->rename = fs_rename;
-	fops->truncate = fs_truncate;
-	fops->destroy = fs_destroy;
+    if ((ret = fs_drive(HARD_DRIVE)) != 0) {
+        debugf("Error reading hard drive: %s\n", strerror(-ret));
+        return ret;
+    }
+    //FUSE operations
+    fops = (struct fuse_operations *) calloc(1, sizeof(struct fuse_operations));
+    fops->getattr = fs_getattr;
+    fops->readdir = fs_readdir;
+    fops->opendir = fs_opendir;
+    fops->open = fs_open;
+    fops->read = fs_read;
+    fops->write = fs_write;
+    fops->create = fs_create;
+    fops->chmod = fs_chmod;
+    fops->chown = fs_chown;
+    fops->unlink = fs_unlink;
+    fops->mkdir = fs_mkdir;
+    fops->rmdir = fs_rmdir;
+    fops->rename = fs_rename;
+    fops->truncate = fs_truncate;
+    fops->destroy = fs_destroy;
 
-	debugf("Press CONTROL-C to quit\n\n");
+    debugf("Press CONTROL-C to quit\n\n");
 
-	return fuse_main(sizeof(evars) / sizeof(evars[0]) - 1, evars, fops,
-			 (void *)HARD_DRIVE);
+    return fuse_main(sizeof(evars) / sizeof(evars[0]) - 1, evars, fops,
+            (void *)HARD_DRIVE);
+}
+
+
+////////////////////////////////////////////////
+// Helper Functions
+///////////////////////////////////////////////
+
+// Splits the abs_path into a list of the strings delimited by /.
+list <string> Split(string abs_path){
+    list <string> retList = *(new list<string>);
+    string str = "";
+
+    for(unsigned int i = 0; i < abs_path.size(); i++){
+        if(abs_path[i] == '/'){
+            retList.push_back(str);
+            str = "";
+        }
+        else
+            str += abs_path[i];    
+    }
+    if(str != "") retList.push_back(str);
+
+    return retList;
+}
+
+// Traverses the directory tree and returns a pointer to the node specified by path.
+// If the node doesn't exist, null is returned.
+// path is a list returned by Split.
+TreeNode *getTreeNode(list<string> path) {
+    TreeNode *cur = root;
+
+    // Traverse the directory tree looking for matching file names at each level.
+    // If one on of the levels isn't there, we can't get the requested node.
+    list<string>::iterator name = path.begin();
+    name++;
+    for(; name != path.end(); name++) {
+        bool found = false;
+
+        for(list<TreeNode*>::iterator child = cur->children.begin(); child != cur->children.end(); child++) {
+            // If there is a matching subdirectory.
+            if((*child)->relName == *name) {
+                cur = *child;
+                found = true;
+                break;
+            }
+        }
+        // If no child found for this child, it's an error.
+        if(!found)
+            return NULL;
+    }
+
+    return cur;
+}
+
+TreeNode *getTreeNode(string path) {
+    list<string> parsedNames = Split(path);
+    return getTreeNode(parsedNames);
+}
+
+// Insert NODE n into the correct place in the file tree based on the full path in n.name.
+void insertNode(NODE* n) {
+    if(root == NULL) {
+        root = new TreeNode(n);
+        addId(n);
+        return;
+    }
+
+    list<string> parsedNames = Split(n->name);
+    parsedNames.pop_back();
+    TreeNode *parent = getTreeNode(parsedNames); // The parent dir of NODE n.
+
+    // If getTreeNode returns null, the path doesn't exist.
+    if(parent == NULL)
+        return;
+
+    parent->children.push_back(new TreeNode(n));
+    addId(n);
+}
+
+void addId(NODE *n) {
+    if(idList.size() < n->id + 1)
+        idList.resize(n->id + 1, NULL);
+
+    idList[n->id] = n;
+}
+
+uint64_t getAvailId() {
+    int size = 20; // How much to resize by when it's needed.
+
+    for(uint64_t i = 0; i < idList.size(); i++) {
+        if(idList[i] == NULL)
+            return i;
+    }
+
+    uint64_t ret = idList.size();
+    idList.resize(size, NULL);
+
+    return ret;
+}
+
+// Returns the NODEs located at path.
+list<TreeNode*> getChildren(const char* path) {
+    return getTreeNode(path)->children;
+}
+
+// For debugging. Prints file tree structure.
+void printFileTree(TreeNode *root, int level) {
+    for(int i = 0; i < level; i++)
+        debugf(" ");
+    debugf("%s", root->relName.c_str());
+    if(S_ISDIR(root->node->mode))
+        debugf("/");
+    debugf("\n");
+
+    for(list<TreeNode*>::iterator child = root->children.begin(); child != root->children.end(); child++) {
+        printFileTree(*child, level+1);
+    }
+}
+
+// Recursively search for the node n with n.id == id.
+// start defaults to root.
+// Returns Null if no id is found.
+NODE *getNodeFromId(uint64_t id) {
+    return idList[id];
+}
+
+uint64_t getNumBlocks(const NODE *n) {
+    if(S_ISDIR(n->mode) || S_ISLNK(n->mode))
+        return 0;
+    else
+        return n->size / bh.block_size + 1;
 }

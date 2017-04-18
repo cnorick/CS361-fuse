@@ -37,7 +37,7 @@ int main(int argc, char *argv[])
 	memset(data, 0, sizeof(data));
 	memset(data2, 0, sizeof(data2));
 	memset(data3, 0, sizeof(data3));
-	strcpy(data, "Hello World!\r\n\r\n\r\nThis is a test file!\n\n\n");
+	strcpy(data, "Hello World!\n\n\nThis is a test file!\n\n\n");
 	strcpy(data2, "Not in my neighborhood!\n");
 	strcpy(data3, "I am a file that is stuffed into a subdir!\n");
 
