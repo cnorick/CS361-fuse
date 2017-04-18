@@ -288,11 +288,40 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if(getTreeNode(path) != NULL)
         return -EEXIST;
 
-    //NODE n;
-    
-    
+    if(strlen(path) > NAME_SIZE)
+        return -ENAMETOOLONG;
 
-    return -EIO;
+    if(fi->flags & O_RDONLY)
+        return -EROFS;
+
+    NODE *n = new NODE;
+
+    strcpy(n->name, path);
+    n->id = getAvailId();
+    n->uid = getuid();
+    n->gid = getgid();
+    n->mode = mode | S_IFREG;
+    n->size = 0;
+
+    int t = time(NULL);
+    n->ctime = t;
+    n->atime = t;
+    n->mtime = t;
+
+
+   // if(!isEnoughSpace(1)) // need enough space to add one block.
+   //     return -ENOSPC;
+    BLOCK *b = new BLOCK;
+    b->data = new char[bh.block_size];
+    blocks.push_back(b);
+    n->blocks = new uint64_t[1];
+    n->blocks[0] = blocks.size() - 1;
+    
+    insertNode(n);
+
+    printFileTree(root, 0);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
