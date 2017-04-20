@@ -450,7 +450,6 @@ int fs_unlink(const char *path)
 {
     debugf("fs_unlink: %s\n", path);
 
-
     TreeNode *tn = getTreeNode(path);
     if(tn == NULL)
         return -ENOENT;
@@ -504,7 +503,20 @@ int fs_mkdir(const char *path, mode_t mode)
 int fs_rmdir(const char *path)
 {
     debugf("fs_rmdir: %s\n", path);
-    return -EIO;
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    if(!tn->children.empty())
+        return -ENOTEMPTY;
+    
+    NODE *n = tn->node;
+    if(!S_ISDIR(n->mode))
+        return -ENOTDIR;
+
+    removeNode(n);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
