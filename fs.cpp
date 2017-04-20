@@ -421,7 +421,16 @@ int fs_opendir(const char *path, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_chmod(const char *path, mode_t mode)
 {
-    return -EIO;
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE *n = tn->node;
+
+    mode_t m;
+    n->mode = mode;
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
