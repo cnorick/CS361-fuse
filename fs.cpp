@@ -426,8 +426,6 @@ int fs_chmod(const char *path, mode_t mode)
         return -ENOENT;
 
     NODE *n = tn->node;
-
-    mode_t m;
     n->mode = mode;
 
     return 0;
@@ -439,7 +437,16 @@ int fs_chmod(const char *path, mode_t mode)
 int fs_chown(const char *path, uid_t uid, gid_t gid)
 {
     debugf("fs_chown: %s\n", path);
-    return -EIO;
+    
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    
+    NODE *n = tn->node;
+    n->uid = uid;
+    n->gid = gid;
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
