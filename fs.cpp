@@ -20,6 +20,7 @@
 #include <vector>
 #include <string>
 #include <list>
+#include <queue>
 #include <algorithm>
 
 using namespace std;
@@ -60,8 +61,9 @@ list <string> Split(string abs_path);
 typedef struct TreeNode {
         list<TreeNode*> children;
         NODE *node;
+        TreeNode *parent;
         string relName;
-        TreeNode(NODE *n) : node(n) {
+        TreeNode(NODE *n, TreeNode *parent) : node(n), parent(parent) {
             relName = Split(n->name).back();
         }
 } TreeNode;
@@ -75,6 +77,10 @@ NODE *getNodeFromId(uint64_t id);
 uint64_t getNumBlocks(const NODE *n);
 void addId(NODE *n);
 uint64_t getAvailId();
+void removeBlocks(NODE *n);
+void addBlock(BLOCK *b);
+void freeBlock(uint64_t offset);
+void removeNode(NODE *n);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -82,6 +88,7 @@ uint64_t getAvailId();
 //
 /////////////////////////////////////////////////////////////////
 vector<BLOCK*> blocks;
+queue<int> freeBlocks;
 TreeNode *root = NULL;
 BLOCK_HEADER bh;
 vector<NODE*> idList; // list of nodes with id as index.
@@ -288,11 +295,40 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if(getTreeNode(path) != NULL)
         return -EEXIST;
 
-    //NODE n;
-    
-    
+    if(strlen(path) > NAME_SIZE)
+        return -ENAMETOOLONG;
 
-    return -EIO;
+    if(fi->flags & O_RDONLY)
+        return -EROFS;
+
+    NODE *n = new NODE;
+
+    strcpy(n->name, path);
+    n->id = getAvailId();
+    n->uid = getuid();
+    n->gid = getgid();
+    n->mode = mode | S_IFREG;
+    n->size = 0;
+
+    int t = time(NULL);
+    n->ctime = t;
+    n->atime = t;
+    n->mtime = t;
+
+
+   // if(!isEnoughSpace(1)) // need enough space to add one block.
+   //     return -ENOSPC;
+    BLOCK *b = new BLOCK;
+    b->data = new char[bh.block_size];
+    blocks.push_back(b);
+    n->blocks = new uint64_t[1];
+    n->blocks[0] = blocks.size() - 1;
+    
+    insertNode(n);
+
+    printFileTree(root, 0);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -407,7 +443,25 @@ int fs_chown(const char *path, uid_t uid, gid_t gid)
 int fs_unlink(const char *path)
 {
     debugf("fs_unlink: %s\n", path);
-    return -EIO;
+
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    
+    NODE *n = tn->node;
+
+    if(S_ISDIR(n->mode))
+        return -EISDIR;
+
+    if(S_ISREG(n->mode)) {
+        removeBlocks(n);
+    }
+
+    // If either a link or reg, Remove node from file tree.
+    removeNode(n);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -567,7 +621,7 @@ TreeNode *getTreeNode(string path) {
 // Insert NODE n into the correct place in the file tree based on the full path in n.name.
 void insertNode(NODE* n) {
     if(root == NULL) {
-        root = new TreeNode(n);
+        root = new TreeNode(n, NULL);
         addId(n);
         return;
     }
@@ -580,8 +634,48 @@ void insertNode(NODE* n) {
     if(parent == NULL)
         return;
 
-    parent->children.push_back(new TreeNode(n));
+    parent->children.push_back(new TreeNode(n, parent));
     addId(n);
+}
+
+// Deletes the block stored at block[offset], and adds offset to the free list.
+void freeBlock(uint64_t offset) {
+    BLOCK *b = blocks[offset];
+    if(b == NULL)
+        return;
+
+    delete b;
+    freeBlocks.push(offset);
+}
+
+// First searches the free list for a place to put the block. Else, appends it to the end of blocks.
+void addBlock(BLOCK *b) {
+    if(!freeBlocks.empty()) {
+        int i = freeBlocks.back();
+        freeBlocks.pop();
+        blocks[i] = b;
+    }
+    else {
+        blocks.push_back(b);
+    }
+}
+
+// Remove all blocks associated with n.
+void removeBlocks(NODE *n) {
+    for(uint64_t i = 0; i < getNumBlocks(n); i++) {
+        freeBlock(n->blocks[i]);
+    }
+}
+
+// Removes node from File tree and from idList.
+void removeNode(NODE *n) {
+    TreeNode *tn = getTreeNode(n->name);
+    TreeNode *parent = tn->parent;
+
+    parent->children.remove(tn);
+    idList[n->id] = NULL;
+    delete tn;
+    delete n;
 }
 
 void addId(NODE *n) {
