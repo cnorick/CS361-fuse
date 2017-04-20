@@ -81,6 +81,7 @@ void removeBlocks(NODE *n);
 void addBlock(BLOCK *b);
 void freeBlock(uint64_t offset);
 void removeNode(NODE *n);
+NODE *defaultNode(const char *path);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -301,21 +302,10 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if(fi->flags & O_RDONLY)
         return -EROFS;
 
-    NODE *n = new NODE;
-
-    strcpy(n->name, path);
-    n->id = getAvailId();
-    n->uid = getuid();
-    n->gid = getgid();
+    NODE *n = defaultNode(path);
     n->mode = mode | S_IFREG;
-    n->size = 0;
 
-    int t = time(NULL);
-    n->ctime = t;
-    n->atime = t;
-    n->mtime = t;
-
-
+    // FIX THIS!!!!!!!
    // if(!isEnoughSpace(1)) // need enough space to add one block.
    //     return -ENOSPC;
     BLOCK *b = new BLOCK;
@@ -488,7 +478,22 @@ int fs_unlink(const char *path)
 int fs_mkdir(const char *path, mode_t mode)
 {
     debugf("fs_mkdir: %s\n", path);
-    return -EIO;
+
+    // Check for existence.
+    if(getTreeNode(path) != NULL)
+        return -EEXIST;
+
+    if(strlen(path) > NAME_SIZE)
+        return -ENAMETOOLONG;
+
+    NODE *n = defaultNode(path);
+    n->mode = mode | S_IFDIR;
+
+    insertNode(n);
+
+    printFileTree(root, 0);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -746,4 +751,21 @@ uint64_t getNumBlocks(const NODE *n) {
         return 0;
     else
         return n->size / bh.block_size + 1;
+}
+
+// Constructor for NODE
+NODE *defaultNode(const char *path) {
+    NODE *n = new NODE;
+    strcpy(n->name, path);
+    n->uid = getuid();
+    n->gid = getgid();
+    n->size = 0;
+
+    int t = time(NULL);
+    n->ctime = t;
+    n->atime = t;
+    n->mtime = t;
+    n->id = getAvailId();
+
+    return n;
 }
