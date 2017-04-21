@@ -1,4 +1,4 @@
-//COSC 361 Spring 2017
+//OSC 361 Spring 2017
 //FUSE Project Template
 //Group Name
 //Group Member 1 Name
@@ -22,6 +22,7 @@
 #include <list>
 #include <queue>
 #include <algorithm>
+#include <fstream>
 
 using namespace std;
 
@@ -86,6 +87,7 @@ NODE *defaultNode(const char *path);
 bool pathIsValid(const char *path);
 void changeName(TreeNode *tn, const char *path);
 void recursivelyChangeName(TreeNode *tn, const string &path);
+uint64_t getNumNodes();
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -599,6 +601,29 @@ void fs_destroy(void *ptr)
 
     //Save the internal data to the hard drive
     //specified by <filename>
+    
+	ofstream fout(filename, ios::binary);
+	if (!fout) {
+		return;
+	}
+
+    bh.blocks = blocks.size();
+    bh.nodes = getNumNodes();
+	fout.write((char*)&bh, sizeof(bh));
+
+    for(vector<NODE*>::iterator it = idList.begin(); it != idList.end(); it++) {
+        NODE *n = *it;
+        if(n != NULL) {
+            fout.write((char*)n, ONDISK_NODE_SIZE);
+            fout.write((char*)n->blocks, sizeof(uint64_t) * getNumBlocks(n));
+        }
+    }
+
+    for(vector<BLOCK*>::iterator it = blocks.begin(); it != blocks.end(); it++) {
+        fout.write(((*it)->data), bh.block_size);
+    }
+
+    //TODO: Delete everything.
 }
 
 //////////////////////////////////////////////////////////////////
@@ -879,4 +904,13 @@ void recursivelyChangeName(TreeNode *tn, const string &path) {
     for(list<TreeNode*>::iterator it = tn->children.begin(); it != tn->children.end(); it++) {
         recursivelyChangeName(*it, newName);
     }
+}
+
+// Returns the number of nodes in the idList.
+uint64_t getNumNodes() {
+    uint64_t num = 0;
+    for(vector<NODE*>::iterator it = idList.begin(); it != idList.end(); it++) {
+        num += *it != NULL ? 1 : 0;
+    }
+    return num;
 }
