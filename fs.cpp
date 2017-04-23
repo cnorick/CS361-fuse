@@ -268,8 +268,18 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
 int fs_write(const char *path, const char *data, size_t size, off_t offset,
         struct fuse_file_info *fi)
 {
+    TreeNode *tn;
+    NODE *node;
+
+    //get the tree node and node
+    strpath = string(path);
+    tn = getTreeNode(strpath);
+    if(tn == NULL) return -ENOENT;
+    node = tn->node;
+
+    
+    
     debugf("fs_write: %s\n", path);
-    return -EIO;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -636,4 +646,9 @@ uint64_t getNumBlocks(const NODE *n) {
         return 0;
     else
         return n->size / bh.block_size + 1;
+}
+
+int IsEnoughSpace(uint64_t new_blocks){
+    if(MAX_DRIVE_SIZE - bh.blocks * bh.block_size - new_blocks * bh.block_size > 0) return 1;
+    return 0;
 }
