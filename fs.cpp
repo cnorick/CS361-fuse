@@ -1,4 +1,4 @@
-//COSC 361 Spring 2017
+//OSC 361 Spring 2017
 //FUSE Project Template
 //Group Name
 //Group Member 1 Name
@@ -22,6 +22,7 @@
 #include <list>
 #include <queue>
 #include <algorithm>
+#include <fstream>
 
 using namespace std;
 
@@ -56,7 +57,7 @@ using namespace std;
 //ENOTEMPTY     36      /* Directory not empty */
 //ENAMETOOLONG  40      /* The name given is too long */
 
-list <string> Split(string abs_path);
+list <string> Split(const string &abs_path);
 
 typedef struct TreeNode {
         list<TreeNode*> children;
@@ -68,10 +69,10 @@ typedef struct TreeNode {
         }
 } TreeNode;
 
-TreeNode *getTreeNode(string path);
+TreeNode *getTreeNode(const string &path);
 TreeNode *getTreeNode(list<string> path);
 void printFileTree(TreeNode *root, int level = 0);
-void insertNode(NODE *n);
+int insertNode(NODE* n);
 list<TreeNode*> getChildren(const char* path);
 NODE *getNodeFromId(uint64_t id);
 uint64_t getNumBlocks(const NODE *n);
@@ -81,6 +82,12 @@ void removeBlocks(NODE *n);
 void addBlock(BLOCK *b);
 void freeBlock(uint64_t offset);
 void removeNode(NODE *n);
+void deleteNode(NODE *n);
+NODE *defaultNode(const char *path);
+bool pathIsValid(const char *path);
+void changeName(TreeNode *tn, const char *path);
+void recursivelyChangeName(TreeNode *tn, const string &path);
+uint64_t getNumNodes();
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -301,21 +308,10 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     if(fi->flags & O_RDONLY)
         return -EROFS;
 
-    NODE *n = new NODE;
-
-    strcpy(n->name, path);
-    n->id = getAvailId();
-    n->uid = getuid();
-    n->gid = getgid();
+    NODE *n = defaultNode(path);
     n->mode = mode | S_IFREG;
-    n->size = 0;
 
-    int t = time(NULL);
-    n->ctime = t;
-    n->atime = t;
-    n->mtime = t;
-
-
+    // FIX THIS!!!!!!!
    // if(!isEnoughSpace(1)) // need enough space to add one block.
    //     return -ENOSPC;
     BLOCK *b = new BLOCK;
@@ -324,7 +320,8 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     n->blocks = new uint64_t[1];
     n->blocks[0] = blocks.size() - 1;
     
-    insertNode(n);
+    if(insertNode(n) != 0)
+        return -ENOENT;
 
     printFileTree(root, 0);
 
@@ -421,7 +418,14 @@ int fs_opendir(const char *path, struct fuse_file_info *fi)
 //////////////////////////////////////////////////////////////////
 int fs_chmod(const char *path, mode_t mode)
 {
-    return -EIO;
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+
+    NODE *n = tn->node;
+    n->mode = mode;
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -430,7 +434,16 @@ int fs_chmod(const char *path, mode_t mode)
 int fs_chown(const char *path, uid_t uid, gid_t gid)
 {
     debugf("fs_chown: %s\n", path);
-    return -EIO;
+    
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    
+    NODE *n = tn->node;
+    n->uid = uid;
+    n->gid = gid;
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -443,7 +456,6 @@ int fs_chown(const char *path, uid_t uid, gid_t gid)
 int fs_unlink(const char *path)
 {
     debugf("fs_unlink: %s\n", path);
-
 
     TreeNode *tn = getTreeNode(path);
     if(tn == NULL)
@@ -460,6 +472,7 @@ int fs_unlink(const char *path)
 
     // If either a link or reg, Remove node from file tree.
     removeNode(n);
+    deleteNode(n);
 
     return 0;
 }
@@ -472,7 +485,23 @@ int fs_unlink(const char *path)
 int fs_mkdir(const char *path, mode_t mode)
 {
     debugf("fs_mkdir: %s\n", path);
-    return -EIO;
+
+    // Check for existence.
+    if(getTreeNode(path) != NULL)
+        return -EEXIST;
+
+    if(strlen(path) > NAME_SIZE)
+        return -ENAMETOOLONG;
+
+    NODE *n = defaultNode(path);
+    n->mode = mode | S_IFDIR;
+
+    if(insertNode(n) != 0)
+        return -ENOENT;
+
+    printFileTree(root, 0);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -483,7 +512,21 @@ int fs_mkdir(const char *path, mode_t mode)
 int fs_rmdir(const char *path)
 {
     debugf("fs_rmdir: %s\n", path);
-    return -EIO;
+
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    if(!tn->children.empty())
+        return -ENOTEMPTY;
+    
+    NODE *n = tn->node;
+    if(!S_ISDIR(n->mode))
+        return -ENOTDIR;
+
+    removeNode(n);
+    deleteNode(n);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -495,7 +538,44 @@ int fs_rmdir(const char *path)
 int fs_rename(const char *path, const char *new_name)
 {
     debugf("fs_rename: %s -> %s\n", path, new_name);
-    return -EIO;
+
+    // Get current Treenode.
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL)
+        return -ENOENT;
+    if(strlen(new_name) > NAME_SIZE)
+        return -ENAMETOOLONG;
+   
+    // Remove tn from its parent's list.
+    TreeNode *parent = tn->parent;
+    parent->children.remove(tn);
+
+    // Add tn to its new parent's list.
+    list<string> parsedNewName = Split(new_name);
+    parsedNewName.pop_back();
+    TreeNode *newParent = getTreeNode(parsedNewName);
+    if(newParent == NULL) // If getTreeNode returns null, the path doesn't exist.
+        return -ENOENT;
+
+    // If newName exists, delete it, so that it can be replaced
+    TreeNode *newTn = getTreeNode(new_name);
+    if(newTn != NULL) {
+        NODE *newNode = newTn->node;
+        removeNode(newNode);
+        deleteNode(newNode);
+    }
+
+    newParent->children.push_back(tn);
+
+    // Change tn's parent.
+    tn->parent = newParent;
+
+    // Change the name of tn's node and all of its children's nodes.
+    changeName(tn, new_name);
+
+    printFileTree(root, 0);
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -521,6 +601,29 @@ void fs_destroy(void *ptr)
 
     //Save the internal data to the hard drive
     //specified by <filename>
+    
+	ofstream fout(filename, ios::binary);
+	if (!fout) {
+		return;
+	}
+
+    bh.blocks = blocks.size();
+    bh.nodes = getNumNodes();
+	fout.write((char*)&bh, sizeof(bh));
+
+    for(vector<NODE*>::iterator it = idList.begin(); it != idList.end(); it++) {
+        NODE *n = *it;
+        if(n != NULL) {
+            fout.write((char*)n, ONDISK_NODE_SIZE);
+            fout.write((char*)n->blocks, sizeof(uint64_t) * getNumBlocks(n));
+        }
+    }
+
+    for(vector<BLOCK*>::iterator it = blocks.begin(); it != blocks.end(); it++) {
+        fout.write(((*it)->data), bh.block_size);
+    }
+
+    //TODO: Delete everything.
 }
 
 //////////////////////////////////////////////////////////////////
@@ -567,7 +670,7 @@ int main(int argc, char *argv[])
 ///////////////////////////////////////////////
 
 // Splits the abs_path into a list of the strings delimited by /.
-list <string> Split(string abs_path){
+list <string> Split(const string &abs_path){
     list <string> retList = *(new list<string>);
     string str = "";
 
@@ -613,17 +716,18 @@ TreeNode *getTreeNode(list<string> path) {
     return cur;
 }
 
-TreeNode *getTreeNode(string path) {
+TreeNode *getTreeNode(const string &path) {
     list<string> parsedNames = Split(path);
     return getTreeNode(parsedNames);
 }
 
 // Insert NODE n into the correct place in the file tree based on the full path in n.name.
-void insertNode(NODE* n) {
+// Returns 0 on success and 1 on failure.
+int insertNode(NODE* n) {
     if(root == NULL) {
         root = new TreeNode(n, NULL);
         addId(n);
-        return;
+        return 0;
     }
 
     list<string> parsedNames = Split(n->name);
@@ -632,10 +736,24 @@ void insertNode(NODE* n) {
 
     // If getTreeNode returns null, the path doesn't exist.
     if(parent == NULL)
-        return;
+        return 1;
 
     parent->children.push_back(new TreeNode(n, parent));
     addId(n);
+
+    return 0;
+}
+
+// Returns true if the path leading up to the last '/' exists.
+bool pathIsValid(const char *path) {
+    list<string> parsedNames = Split(path);
+    parsedNames.pop_back();
+    TreeNode *parent = getTreeNode(parsedNames); // The parent dir of NODE n.
+
+    // If getTreeNode returns null, the path doesn't exist.
+    if(parent == NULL)
+        return false;
+    return true;
 }
 
 // Deletes the block stored at block[offset], and adds offset to the free list.
@@ -667,14 +785,21 @@ void removeBlocks(NODE *n) {
     }
 }
 
-// Removes node from File tree and from idList.
+// Removes node from File tree only.
+// Deletes treenode.
+// Does not delete n.
 void removeNode(NODE *n) {
+    debugf("%s\n", n->name);
     TreeNode *tn = getTreeNode(n->name);
     TreeNode *parent = tn->parent;
 
     parent->children.remove(tn);
-    idList[n->id] = NULL;
     delete tn;
+}
+
+// deletes n and removes its id from the idList.
+void deleteNode(NODE *n) {
+    idList[n->id] = NULL;
     delete n;
 }
 
@@ -730,4 +855,62 @@ uint64_t getNumBlocks(const NODE *n) {
         return 0;
     else
         return n->size / bh.block_size + 1;
+}
+
+// Constructor for NODE
+NODE *defaultNode(const char *path) {
+    NODE *n = new NODE;
+    strcpy(n->name, path);
+    n->uid = getuid();
+    n->gid = getgid();
+    n->size = 0;
+
+    int t = time(NULL);
+    n->ctime = t;
+    n->atime = t;
+    n->mtime = t;
+    n->id = getAvailId();
+
+    return n;
+}
+
+// Change both the tn.relName and tn.node.name for tn and the tn.node.name of all of its children.
+// tn->parent must already be set to the new parent.
+// path is the full path up to and including tn.
+void changeName(TreeNode *tn, const char *path) {
+    string parentName = tn->parent->relName;
+    list<string> parsedNames = Split(path);
+
+   tn->relName = parsedNames.back();
+
+    // Remove the last element of parsedNames (The relName of tn).
+    while(parsedNames.back() != parentName)
+        parsedNames.pop_back();
+
+    // Reconstruct path without tn's relname.
+    string s;
+    for (list<string>::const_iterator it = parsedNames.begin(); it != parsedNames.end(); ++it)
+        s += *it + '/';
+    s.pop_back(); // Git rid of last '/'.
+    debugf("Name: %s\n", s.c_str());
+
+    recursivelyChangeName(tn, s);
+}
+
+// tn is the TreeNode whose name to change. Path is the full path up to and including tn's parent.
+void recursivelyChangeName(TreeNode *tn, const string &path) {
+    string newName = path + '/' + tn->relName;
+    strcpy(tn->node->name, newName.c_str());
+    for(list<TreeNode*>::iterator it = tn->children.begin(); it != tn->children.end(); it++) {
+        recursivelyChangeName(*it, newName);
+    }
+}
+
+// Returns the number of nodes in the idList.
+uint64_t getNumNodes() {
+    uint64_t num = 0;
+    for(vector<NODE*>::iterator it = idList.begin(); it != idList.end(); it++) {
+        num += *it != NULL ? 1 : 0;
+    }
+    return num;
 }
