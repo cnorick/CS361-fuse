@@ -282,18 +282,64 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
 int fs_write(const char *path, const char *data, size_t size, off_t offset,
         struct fuse_file_info *fi)
 {
+    int i, total_block_count, new_block_count;
+    uint64_t index, offset_block_index, blocks_index;
+    string strpath;
     TreeNode *tn;
     NODE *node;
+    BLOCK *b;
+    size_t bytes_written, size_left;
 
     //get the tree node and node
     strpath = string(path);
     tn = getTreeNode(strpath);
     if(tn == NULL) return -ENOENT;
     node = tn->node;
+   
+    //handle blocks and write ///////////////////////////////////////////////// 
+    bytes_written = 0; 
+    size_left = size;
+    total_block_count = (node->size + size - offset) / bh.block_size + 1; //total number of blocks for the file
+    cur_block_count = getNumBlocks(node);
+    new_block_count = total_block_count - cur_block_count; //total number of new blocks needed to be written
 
-    
-    
+    //NEED TO CHECK TO SEE IF THERE IS ENOUGH SPACE
+
+    //overwrite blocks
+    //overwrite first offset block
+    uint64_t offset_within_block = offset - (offset / bh.block_size) * bh.block_size;
+    offset_block_index = (uint64_t) offset / bh.block_size;
+    blocks_index = node->blocks[offset_block_index];
+    b = blocks[blocks_index];
+    memcpy(b->data[offset_within_block], data, min(size_left, bh.block_size - offset_within_block));
+    bytes_written += min(size_left, bh.block_size - offset_within_block);
+    size_left -= min(size_left, bh.block_size - offset_within_block);
+    //update node->size
+
+    //write the rest of the blocks
+    for(i = offset_block_index+1; i < cur_block_count; i++){
+        blocks_index = nodes->blocks[i];
+        b = blocks[blocks_index]; 
+        memcpy(b->data, data[bytes_written], min(size_left, bh.block_size));
+        bytes_written += min(size_left, bh.block_size);
+        size_left -= min(size_left, bh.block_size);
+        //find way to update node->size if last block was partially empty and gets written more
+    }
+
+    //create new blocks and write to them
+    for(i = 0; i < new_block_count; i++){
+        b = new BLOCK();
+        index = addBlock(b);
+        addBlockToNode(node, index);
+        memcpy(b->data, data[bytes_written], min(size_left, bh.block_size));
+        bytes_written += min(size_left, bh.block_size);
+        node->size += bytes_written;
+        size_left = size_left - bh.block_size;
+    }
+
+    //if the new_block_count is negative then remove them from the blocks global and node->blocks
     debugf("fs_write: %s\n", path);
+    return bytes_written;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -928,4 +974,30 @@ uint64_t getNumNodes() {
         num += *it != NULL ? 1 : 0;
     }
     return num;
+}
+
+void addBlockToNode(NODE *n, uint64_t index){
+    uint64_t cur_blk_count, new_blk_count;
+    uint64_t new_blocks_array;
+
+    //set the current block count and the new block count
+    cur_blk_count = getNumBlocks(n);
+    new_blk_count = cur_blk_count + 1;
+
+    //allocate a new, bigger array
+    new_blocks_array = malloc(sizeof(uint64_t) * new_blk_count);
+    
+    //copy the contents from the old array to the new array
+    for(int i = 0; i < cur_blk_count; i++){
+        new_blocks_array[i] = node->blocks[i];
+    }
+
+    //add the new block index
+    new_blocks_array[new_blk_count - 1] = index;
+    
+    //free the old array
+    free(node->blocks);
+
+    //set the new array
+    node->blocks = &new_blocks_array;  
 }
