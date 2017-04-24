@@ -79,7 +79,7 @@ uint64_t getNumBlocks(const NODE *n);
 void addId(NODE *n);
 uint64_t getAvailId();
 void removeBlocks(NODE *n);
-void addBlock(BLOCK *b);
+uint64_t addBlock(BLOCK *b);
 void freeBlock(uint64_t offset);
 void removeNode(NODE *n);
 void deleteNode(NODE *n);
@@ -88,6 +88,7 @@ bool pathIsValid(const char *path);
 void changeName(TreeNode *tn, const char *path);
 void recursivelyChangeName(TreeNode *tn, const string &path);
 uint64_t getNumNodes();
+void addBlockToNode(NODE *node, uint64_t index);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -282,8 +283,9 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset,
 int fs_write(const char *path, const char *data, size_t size, off_t offset,
         struct fuse_file_info *fi)
 {
-    int i, total_block_count, new_block_count;
+    uint64_t i;
     uint64_t index, offset_block_index, blocks_index;
+	uint64_t cur_block_count, new_block_count, total_block_count;
     string strpath;
     TreeNode *tn;
     NODE *node;
@@ -311,16 +313,16 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     offset_block_index = (uint64_t) offset / bh.block_size;
     blocks_index = node->blocks[offset_block_index];
     b = blocks[blocks_index];
-    memcpy(b->data[offset_within_block], data, min(size_left, bh.block_size - offset_within_block));
+    memcpy(b->data+offset_within_block, data, ((size_t) min(size_left, bh.block_size - offset_within_block)));
     bytes_written += min(size_left, bh.block_size - offset_within_block);
     size_left -= min(size_left, bh.block_size - offset_within_block);
     //update node->size
 
     //write the rest of the blocks
     for(i = offset_block_index+1; i < cur_block_count; i++){
-        blocks_index = nodes->blocks[i];
+        blocks_index = node->blocks[i];
         b = blocks[blocks_index]; 
-        memcpy(b->data, data[bytes_written], min(size_left, bh.block_size));
+        memcpy(b->data, data+bytes_written, ((size_t) min(size_left, bh.block_size)));
         bytes_written += min(size_left, bh.block_size);
         size_left -= min(size_left, bh.block_size);
         //find way to update node->size if last block was partially empty and gets written more
@@ -329,9 +331,9 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     //create new blocks and write to them
     for(i = 0; i < new_block_count; i++){
         b = new BLOCK();
-        index = addBlock(b);
+        index = addBlock(b); //ADDBLOCKS NEEDS TO RETURN INDEX
         addBlockToNode(node, index);
-        memcpy(b->data, data[bytes_written], min(size_left, bh.block_size));
+        memcpy(b->data, data+bytes_written,((size_t) min(size_left, bh.block_size)));
         bytes_written += min(size_left, bh.block_size);
         node->size += bytes_written;
         size_left = size_left - bh.block_size;
@@ -823,14 +825,16 @@ void freeBlock(uint64_t offset) {
 }
 
 // First searches the free list for a place to put the block. Else, appends it to the end of blocks.
-void addBlock(BLOCK *b) {
+uint64_t addBlock(BLOCK *b) {
     if(!freeBlocks.empty()) {
         int i = freeBlocks.back();
         freeBlocks.pop();
         blocks[i] = b;
+		return (uint64_t) i;
     }
     else {
         blocks.push_back(b);
+		return ((uint64_t) blocks.size() - 1);
     }
 }
 
@@ -976,19 +980,19 @@ uint64_t getNumNodes() {
     return num;
 }
 
-void addBlockToNode(NODE *n, uint64_t index){
+void addBlockToNode(NODE *node, uint64_t index){
     uint64_t cur_blk_count, new_blk_count;
-    uint64_t new_blocks_array;
+    uint64_t *new_blocks_array;
 
     //set the current block count and the new block count
-    cur_blk_count = getNumBlocks(n);
+    cur_blk_count = getNumBlocks(node);
     new_blk_count = cur_blk_count + 1;
 
     //allocate a new, bigger array
-    new_blocks_array = malloc(sizeof(uint64_t) * new_blk_count);
+    new_blocks_array = (uint64_t *) malloc(sizeof(uint64_t) * new_blk_count);
     
     //copy the contents from the old array to the new array
-    for(int i = 0; i < cur_blk_count; i++){
+    for(uint64_t i = 0; i < cur_blk_count; i++){
         new_blocks_array[i] = node->blocks[i];
     }
 
@@ -999,5 +1003,5 @@ void addBlockToNode(NODE *n, uint64_t index){
     free(node->blocks);
 
     //set the new array
-    node->blocks = &new_blocks_array;  
+    node->blocks = new_blocks_array;  
 }
