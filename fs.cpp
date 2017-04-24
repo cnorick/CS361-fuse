@@ -295,7 +295,7 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     //get the tree node and node
     strpath = string(path);
     tn = getTreeNode(strpath);
-    if(tn == NULL) return -ENOENT;
+	if(tn == NULL) return -ENOENT;
     node = tn->node;
    
     //handle blocks and write ///////////////////////////////////////////////// 
@@ -304,27 +304,29 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     total_block_count = (node->size + size - offset) / bh.block_size + 1; //total number of blocks for the file
     cur_block_count = getNumBlocks(node);
     new_block_count = total_block_count - cur_block_count; //total number of new blocks needed to be written
-
+	
     //NEED TO CHECK TO SEE IF THERE IS ENOUGH SPACE
 
     //overwrite blocks
     //overwrite first offset block
     uint64_t offset_within_block = offset - (offset / bh.block_size) * bh.block_size;
+	uint64_t size_to_write = min(size_left, bh.block_size - offset_within_block);
     offset_block_index = (uint64_t) offset / bh.block_size;
     blocks_index = node->blocks[offset_block_index];
     b = blocks[blocks_index];
-    memcpy(b->data+offset_within_block, data, ((size_t) min(size_left, bh.block_size - offset_within_block)));
+    memcpy(b->data+offset_within_block, data, ((size_t) size_to_write));
     bytes_written += min(size_left, bh.block_size - offset_within_block);
     size_left -= min(size_left, bh.block_size - offset_within_block);
-    //update node->size
+	node->size += min(node->size, bh.block_size - offset_within_block);
 
-    //write the rest of the blocks
+    //write the rest of the existing blocks
     for(i = offset_block_index+1; i < cur_block_count; i++){
         blocks_index = node->blocks[i];
         b = blocks[blocks_index]; 
         memcpy(b->data, data+bytes_written, ((size_t) min(size_left, bh.block_size)));
         bytes_written += min(size_left, bh.block_size);
         size_left -= min(size_left, bh.block_size);
+
         //find way to update node->size if last block was partially empty and gets written more
     }
 
