@@ -333,6 +333,7 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     //create new blocks and write to them
     for(i = 0; i < new_block_count; i++){
         b = new BLOCK();
+		b->data = (char *) malloc(bh.block_size);
         index = addBlock(b); //ADDBLOCKS NEEDS TO RETURN INDEX
         addBlockToNode(node, index);
         memcpy(b->data, data+bytes_written,((size_t) min(size_left, bh.block_size)));
