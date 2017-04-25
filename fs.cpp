@@ -348,6 +348,7 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 		b = blocks[blocks_index];
 		memcpy(b->data, buf_ptr, write_size);
 		buf_ptr += write_size;
+		size_left -= write_size;
 	}
 
 	//add node size
@@ -535,7 +536,8 @@ int fs_unlink(const char *path)
         return -EISDIR;
 
     if(S_ISREG(n->mode)) {
-        removeBlocks(n);
+       // removeBlocks(n);
+	   free(n->blocks);
     }
 
     // If either a link or reg, Remove node from file tree.
