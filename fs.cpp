@@ -76,6 +76,7 @@ int insertNode(NODE* n);
 list<TreeNode*> getChildren(const char* path);
 NODE *getNodeFromId(uint64_t id);
 uint64_t getNumBlocks(const NODE *n);
+uint64_t getNumBlocks(uint64_t bytes);
 void addId(NODE *n);
 uint64_t getAvailId();
 void removeBlocks(NODE *n);
@@ -654,7 +655,27 @@ int fs_rename(const char *path, const char *new_name)
 int fs_truncate(const char *path, off_t size)
 {
     debugf("fs_truncate: %s to size %d\n", path, size);
-    return -EIO;
+
+    
+    TreeNode *tn = getTreeNode(path);
+    if(tn == NULL) return -ENOENT;
+    NODE *n = tn->node;
+    if((uint64_t)size > n->size)
+        return -EINVAL;
+
+    uint64_t oldBlocks = getNumBlocks(n);
+    uint64_t newBlocks = getNumBlocks(size);
+
+    for(uint64_t i = newBlocks; i < oldBlocks; i++) {
+        uint64_t index = n->blocks[i];
+        freeBlock(index);
+    }
+
+    n->blocks = (uint64_t*)realloc(n->blocks, newBlocks);
+    n->size = size;
+    
+
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -923,7 +944,11 @@ uint64_t getNumBlocks(const NODE *n) {
     if(S_ISDIR(n->mode) || S_ISLNK(n->mode))
         return 0;
     else
-        return n->size / bh.block_size + 1;
+        return getNumBlocks(n->size);
+}
+
+uint64_t getNumBlocks(uint64_t bytes) {
+    return bytes / bh.block_size + 1;
 }
 
 int IsEnoughSpace(uint64_t new_blocks){
