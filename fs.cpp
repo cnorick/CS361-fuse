@@ -91,6 +91,7 @@ void recursivelyChangeName(TreeNode *tn, const string &path);
 uint64_t getNumNodes();
 void addBlockToNode(NODE *node, uint64_t new_blocks,  uint64_t *index);
 int IsEnoughSpace(uint64_t new_blocks);
+void truncateBlocks(NODE *n, uint64_t num_blocks);
 
 //////////////////////////////////////////////////////////////////
 // 
@@ -311,6 +312,11 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 	//check to see if it is read only
 	if(fi->flags & O_RDONLY) return -EROFS;
 
+	//truncate extra blocks
+	if(total_block_count < cur_block_count){
+		truncateBlocks(node, total_block_count);
+	}
+
 	//set up the buffer
 	buf = (char *) malloc((size / bh.block_size + 1) * bh.block_size);
 	buf_ptr = buf;
@@ -350,7 +356,8 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 		buf_ptr += write_size;
 		size_left -= write_size;
 	}
-
+	
+	free(buf);
 	//add node size
 	node->size = size + offset;	
 	return size;
@@ -875,6 +882,26 @@ void removeBlocks(NODE *n) {
     for(uint64_t i = 0; i < getNumBlocks(n); i++) {
         freeBlock(n->blocks[i]);
     }
+}
+
+void truncateBlocks(NODE *n, uint64_t num_blocks){
+	uint64_t *blocks_table;
+	uint64_t cur_blocks, blocks_index;
+
+	//free the blocks from the blocks vector
+	cur_blocks = getNumBlocks(n);
+	for(uint64_t i = num_blocks; i < cur_blocks; i++){
+		blocks_index = n->blocks[i];
+		freeBlock(blocks_index);
+	}
+
+	//create the new blocks indices table within the node 
+	blocks_table = (uint64_t *) malloc(sizeof(uint64_t) * num_blocks);
+	for(uint64_t i = 0; i < num_blocks; i++){
+		blocks_table[i] = n->blocks[i];
+	}
+	free(n->blocks);
+	n->blocks = blocks_table;
 }
 
 // Removes node from File tree only.
