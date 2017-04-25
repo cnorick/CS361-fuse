@@ -302,9 +302,9 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
     node = tn->node;
 
 	//get block numbers
-	total_block_count = (size + offset) /bh.block_size;
+	total_block_count = ((uint64_t) size + (uint64_t) offset) / (uint64_t) bh.block_size + 1;
 	cur_block_count = getNumBlocks(node);
-	new_block_count = total_block_count - cur_block_count;
+	new_block_count = (uint64_t) max((long long) 0, ((long long) total_block_count - (long long) cur_block_count));
 	
 	//check if there is enough space
 	if(!(IsEnoughSpace(new_block_count))) return -ENOSPC; 
@@ -312,7 +312,7 @@ int fs_write(const char *path, const char *data, size_t size, off_t offset,
 	if(fi->flags & O_RDONLY) return -EROFS;
 
 	//set up the buffer
-	buf = (char *) malloc(size / bh.block_size + 1);
+	buf = (char *) malloc((size / bh.block_size + 1) * bh.block_size);
 	buf_ptr = buf;
 
 	//copy the first block up until offset into the buffer
